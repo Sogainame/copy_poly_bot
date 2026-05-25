@@ -56,3 +56,43 @@ def match_filter(title: str, allowed: List[str]) -> bool:
     asset_code, tf = parsed
     code = f"{asset_code}-{tf}m"
     return code in allowed
+
+
+def extract_window_info(title: str) -> dict:
+    """Извлекает информацию об окне для логирования.
+
+    Возвращает dict с ключами:
+      asset:        'BTC'/'ETH'/'SOL'/'XRP'/'DOGE'/'?'
+      tf:           5/15/None (минут)
+      short_window: краткое имя для строки лога ('BTC 5m 7:00-7:05')
+      full_window:  полное имя для заголовка ('7:00AM-7:05AM ET')
+      key:          уникальный ключ окна для дедупа заголовков
+    """
+    asset = "?"
+    if title:
+        for prefix, code in ASSET_PREFIXES.items():
+            if title.startswith(prefix):
+                asset = code.upper()
+                break
+
+    parsed = parse_market(title)
+    tf = parsed[1] if parsed else None
+
+    m = TIME_RE.search(title or "")
+    if m:
+        full_window = f"{m.group(1)}:{m.group(2)}{m.group(3)}-{m.group(4)}:{m.group(5)}{m.group(6)} ET"
+        short_time = f"{m.group(1)}:{m.group(2)}-{m.group(4)}:{m.group(5)}"
+        short_window = f"{asset} {tf}m {short_time}" if tf else f"{asset} {short_time}"
+        key = f"{asset}_{tf}m_{full_window}"
+    else:
+        full_window = (title or "?")[:40]
+        short_window = (title or "?")[:30]
+        key = title or "?"
+
+    return {
+        "asset": asset,
+        "tf": tf,
+        "short_window": short_window,
+        "full_window": full_window,
+        "key": key,
+    }
