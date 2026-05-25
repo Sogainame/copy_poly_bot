@@ -130,15 +130,15 @@ def main():
                 # Парсим окно
                 w = extract_window_info(title)
 
-                # === ФИЛЬТР: только BTC 5m. Всё остальное — молча, не в лог ===
-                if w["asset"] != "BTC" or w["tf"] != 5:
+                # === ФИЛЬТР: только маркеты из config.filter_markets. Всё остальное — молча, не в лог ===
+                if not match_filter(title, cfg.filter_markets):
                     continue
 
-                # Заголовок при первом появлении нового BTC 5m окна
+                # Заголовок при первом появлении нового окна (любая монета из filter)
                 if w["key"] not in recent_windows:
                     header = (
                         "════════════════════ "
-                        f"ОКНО BTC {w['full_window']} (5m)"
+                        f"ОКНО {w['asset']} {w['full_window']} ({w['tf']}m)"
                         " ════════════════════"
                     )
                     log("")

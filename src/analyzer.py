@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 from . import gamma
-from .filters import extract_window_info
+from .config import load_config
+from .filters import extract_window_info, match_filter
 from .storage import OUR_COPIES
 
 
@@ -29,7 +30,8 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
 
 
 def compute_pnl():
-    """Главный отчёт: PnL по каждой нашей сделке (только BTC 5m)."""
+    """Главный отчёт: PnL по каждой нашей сделке (только маркеты из config.filter_markets)."""
+    cfg = load_config()
     ours = load_jsonl(OUR_COPIES)
     if not ours:
         print("Нет наших копий. Запусти bot.py и подожди пока появятся сделки.")
@@ -43,8 +45,8 @@ def compute_pnl():
         title = r.get("title", "")
         w = extract_window_info(title)
 
-        # Только BTC 5m
-        if w["asset"] != "BTC" or w["tf"] != 5:
+        # Только то что сейчас в фильтре конфига (динамически)
+        if not match_filter(title, cfg.filter_markets):
             continue
 
         if title not in outcome_cache:
@@ -63,10 +65,15 @@ def compute_pnl():
             if ts else "??:??:??"
         )
 
+        # Полное имя окна с активом (BTC/ETH/SOL/XRP)
+        short_window = w["short_window"]  # уже включает asset+tf+time
+
         row = {
             "copy_n": r.get("copy_n"),
             "time": trade_time,
-            "window": w["short_window"].replace("BTC 5m ", ""),  # "9:30-9:35"
+            "window": short_window,
+            "asset": w["asset"],
+            "tf": w["tf"],
             "side": side,
             "outcome": outcome,
             "price": my_price,
@@ -97,7 +104,7 @@ def compute_pnl():
 def print_report(rows: List[Dict[str, Any]]):
     width = 110
     print("\n" + "=" * width)
-    print("МОИ СДЕЛКИ — PnL по каждой ставке (только BTC 5m)")
+    print("МОИ СДЕЛКИ — PnL по каждой ставке")
     print("=" * width)
     print(
         f"{'#':>5} | {'Окно':>10} | {'Время':>8} | {'Сторона':>7} | "
