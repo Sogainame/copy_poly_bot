@@ -115,7 +115,7 @@ def main():
             new_to_process.sort(key=lambda x: x[1].get("timestamp", 0))
 
             for key, t in new_to_process:
-                # Записываем КАЖДУЮ его сделку в JSONL (даже отфильтрованную)
+                # Записываем КАЖДУЮ его сделку в JSONL (даже отфильтрованную) — для analyze.py
                 trader_rec = build_trader_record(t, key)
                 write_trader_trade(trader_rec)
 
@@ -127,39 +127,32 @@ def main():
                 title = t.get("title", "")
                 his_usd = round(size * price, 2)
 
-                # Парсим окно (asset, tf, имена для лога)
+                # Парсим окно
                 w = extract_window_info(title)
 
-                # Заголовок при первом появлении нового BTC окна
-                if w["asset"] == "BTC" and w["tf"] in (5, 15) and w["key"] not in recent_windows:
+                # === ФИЛЬТР: только BTC 5m. Всё остальное — молча, не в лог ===
+                if w["asset"] != "BTC" or w["tf"] != 5:
+                    continue
+
+                # Заголовок при первом появлении нового BTC 5m окна
+                if w["key"] not in recent_windows:
                     header = (
                         "════════════════════ "
-                        f"ОКНО BTC {w['full_window']} ({w['tf']}m)"
+                        f"ОКНО BTC {w['full_window']} (5m)"
                         " ════════════════════"
                     )
                     log("")
                     log(header)
                     recent_windows.append(w["key"])
 
-                # Определяем статус сделки (что мы с ней сделали)
+                # === КОПИРУЕМ ВСЁ ВНУТРИ BTC 5m: BUY, SELL, любой размер ===
                 copy_rec = None
                 tg_msg = None
                 if price <= 0:
                     status = "ERROR price=0"
                 elif size <= 0:
                     status = "ERROR size=0"
-                elif side != "BUY":
-                    status = f"SKIP not BUY ({side})"
-                elif w["asset"] != "BTC":
-                    status = f"SKIP not BTC ({w['asset']})"
-                elif w["tf"] not in (5, 15):
-                    status = "SKIP unknown tf"
-                elif size < cfg.min_size_shares:
-                    status = f"SKIP size<{cfg.min_size_shares}"
-                elif not match_filter(title, cfg.filter_markets):
-                    status = "SKIP tf not in filter"
                 else:
-                    # Проходит фильтры — копируем
                     my_usd = calc_my_bet(his_usd, cfg.bet_pct, cfg.bet_min, cfg.bet_max)
                     my_shares = round(my_usd / price, 4)
                     copy_n += 1
@@ -172,7 +165,7 @@ def main():
                     if cfg.mode == "live":
                         try:
                             execute_live_buy(t, my_usd, cfg)
-                            status = f"COPY #{copy_n} ${my_usd:.2f} ({my_shares:.2f}sh)"
+                            status = f"COPY #{copy_n} {side} ${my_usd:.2f} ({my_shares:.2f}sh)"
                         except NotImplementedError:
                             status = "ERROR LIVE not implemented"
                             SHOULD_STOP = True
@@ -181,10 +174,10 @@ def main():
                             copy_rec["executed"] = False
                             copy_rec["error"] = str(e)
                     else:
-                        status = f"COPY #{copy_n} ${my_usd:.2f} ({my_shares:.2f}sh)"
+                        status = f"COPY #{copy_n} {side} ${my_usd:.2f} ({my_shares:.2f}sh)"
 
                     tg_msg = (
-                        f"COPY #{copy_n} {outcome} @{price:.3f} "
+                        f"COPY #{copy_n} {side} {outcome} @{price:.3f} "
                         f"${my_usd:.2f} | {w['short_window']}"
                     )
 
@@ -195,14 +188,12 @@ def main():
                     if ts else "??:??:??"
                 )
 
-                # Строка лога — одна на каждую сделку трейдера
                 log(
                     f"[{trader_time}] {side:4} {outcome:4} "
                     f"@{price:.3f} {size:7.2f}sh ${his_usd:6.2f} "
                     f"| {w['short_window']} → {status}"
                 )
 
-                # Запись our_copy + Telegram только если реально скопировали
                 if copy_rec is not None:
                     write_our_copy(copy_rec)
                     if tg_msg and cfg.tg_token and cfg.tg_chat:

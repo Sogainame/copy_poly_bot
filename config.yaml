@@ -17,7 +17,7 @@ filter_markets:
   - btc-5m
 
 # Минимальный размер его сделки в shares (отсекает rewards/артефакты)
-min_size_shares: 1
+min_size_shares: 0
 
 # Polling
 poll_interval: 0.5       # секунд между опросами Data API
