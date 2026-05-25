@@ -1,11 +1,16 @@
-"""Анализатор: PnL по окнам + сравнение трейдер vs мы."""
+"""Анализатор: PnL по КАЖДОЙ моей сделке (BTC 5m).
+
+Каждая строка = одна моя ставка. Видно:
+  Время сделки | Окно | BUY/SELL | Up/Down | Цена | Поставил | Резолв | Получил | PnL
+"""
 import json
-from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any
 
 from . import gamma
-from .storage import TRADER_TRADES, OUR_COPIES
+from .filters import extract_window_info
+from .storage import OUR_COPIES
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -23,164 +28,145 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def group_by_title(records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    out = defaultdict(list)
-    for r in records:
-        title = r.get("title", "?")
-        out[title].append(r)
-    return out
-
-
-def summarize_window(records: List[Dict[str, Any]], usd_field: str = "usd") -> Dict[str, float]:
-    """Подсчёт UP $/DOWN $/count для окна."""
-    up_usd = 0.0
-    down_usd = 0.0
-    up_n = 0
-    down_n = 0
-    for r in records:
-        usd = float(r.get(usd_field, 0))
-        side = r.get("outcome", "")
-        if side == "Up":
-            up_usd += usd
-            up_n += 1
-        elif side == "Down":
-            down_usd += usd
-            down_n += 1
-    return {
-        "up_usd": up_usd,
-        "down_usd": down_usd,
-        "up_n": up_n,
-        "down_n": down_n,
-        "total_usd": up_usd + down_usd,
-        "total_n": up_n + down_n,
-    }
-
-
-def summarize_window_shares(records: List[Dict[str, Any]]) -> Dict[str, float]:
-    """Подсчёт UP/DOWN shares для НАШИХ копий (для расчёта PnL)."""
-    up_sh = 0.0
-    down_sh = 0.0
-    up_usd = 0.0
-    down_usd = 0.0
-    for r in records:
-        sh = float(r.get("my_shares", 0))
-        usd = float(r.get("my_usd", 0))
-        side = r.get("outcome", "")
-        if side == "Up":
-            up_sh += sh
-            up_usd += usd
-        elif side == "Down":
-            down_sh += sh
-            down_usd += usd
-    return {"up_sh": up_sh, "down_sh": down_sh, "up_usd": up_usd, "down_usd": down_usd, "spent": up_usd + down_usd}
-
-
 def compute_pnl():
-    """Главный отчёт: ТОЛЬКО наши копии. Сколько поставил → сколько получил → PnL/ROI."""
+    """Главный отчёт: PnL по каждой нашей сделке (только BTC 5m)."""
     ours = load_jsonl(OUR_COPIES)
-
     if not ours:
         print("Нет наших копий. Запусти bot.py и подожди пока появятся сделки.")
         return
 
-    by_title_ours = group_by_title(ours)
+    # Кеш резолвов окон, чтобы не дёргать Gamma 1500 раз
+    outcome_cache: Dict[str, Dict[str, Any]] = {}
 
     rows = []
-    for title, records in by_title_ours.items():
-        our_sum = summarize_window_shares(records)
+    for r in ours:
+        title = r.get("title", "")
+        w = extract_window_info(title)
 
-        # Пропускаем окна где мы ничего не поставили (исторический мусор)
-        if our_sum["spent"] <= 0:
+        # Только BTC 5m
+        if w["asset"] != "BTC" or w["tf"] != 5:
             continue
 
-        outcome = gamma.get_outcome(title)
+        if title not in outcome_cache:
+            outcome_cache[title] = gamma.get_outcome(title)
+        oc = outcome_cache[title]
+
+        side = r.get("side") or "BUY"  # default для старых записей без поля
+        outcome = r.get("outcome", "?")
+        my_usd = float(r.get("my_usd", 0))
+        my_shares = float(r.get("my_shares", 0))
+        my_price = (my_usd / my_shares) if my_shares > 0 else 0.0
+
+        ts = r.get("parent_ts", 0)
+        trade_time = (
+            datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%H:%M:%S")
+            if ts else "??:??:??"
+        )
 
         row = {
-            "title": title,
-            "outcome_status": outcome.get("status"),
-            "winner": outcome.get("winner"),
-            "ours": our_sum,
+            "copy_n": r.get("copy_n"),
+            "time": trade_time,
+            "window": w["short_window"].replace("BTC 5m ", ""),  # "9:30-9:35"
+            "side": side,
+            "outcome": outcome,
+            "price": my_price,
+            "my_usd": my_usd,
+            "my_shares": my_shares,
+            "status": oc.get("status"),
+            "winner": oc.get("winner"),
         }
 
-        if outcome.get("status") == "resolved":
-            winner = outcome["winner"]
-            our_got = our_sum["up_sh"] if winner == "Up" else our_sum["down_sh"]
-            our_pnl = our_got - our_sum["spent"]
-            row["our_got"] = our_got
-            row["our_pnl"] = our_pnl
-            row["our_roi"] = (our_pnl / our_sum["spent"] * 100) if our_sum["spent"] > 0 else 0
+        if oc.get("status") == "resolved" and side == "BUY":
+            winner = oc["winner"]
+            if outcome == winner:
+                got = my_shares * 1.0   # каждый share выигравшей стороны = $1
+                pnl = got - my_usd
+            else:
+                got = 0.0
+                pnl = -my_usd
+            row["got"] = got
+            row["pnl"] = pnl
+
         rows.append(row)
 
-    rows.sort(key=lambda r: r["title"])
+    # Сортировка: по окну, потом по времени
+    rows.sort(key=lambda r: (r.get("window", ""), r.get("time", "")))
     print_report(rows)
 
 
 def print_report(rows: List[Dict[str, Any]]):
-    print("\n" + "=" * 92)
-    print("МОИ КОПИИ — ОТЧЁТ PnL")
-    print("=" * 92)
+    width = 110
+    print("\n" + "=" * width)
+    print("МОИ СДЕЛКИ — PnL по каждой ставке (только BTC 5m)")
+    print("=" * width)
     print(
-        f"{'Окно':<44} | {'Поставил':>10} | {'Победил':>8} | "
-        f"{'Получил':>10} | {'PnL':>10} | ROI"
+        f"{'#':>5} | {'Окно':>10} | {'Время':>8} | {'Сторона':>7} | "
+        f"{'Цена':>5} | {'Поставил':>9} | {'Резолв':>7} | {'Получил':>8} | {'PnL':>9}"
     )
-    print("-" * 92)
+    print("-" * width)
 
     total_spent = 0.0
     total_got = 0.0
-    resolved = 0
-    active = 0
     wins = 0
     losses = 0
+    pending = 0
+    sells = 0
 
     for r in rows:
-        short = (
-            r["title"]
-            .replace("Bitcoin Up or Down - ", "BTC ")
-            .replace("Ethereum Up or Down - ", "ETH ")
-            .replace("Solana Up or Down - ", "SOL ")
-            .replace("XRP Up or Down - ", "XRP ")[:42]
-        )
-        o = r["ours"]
-        winner = r.get("winner", "?") or "-"
+        n = r.get("copy_n") or "?"
+        side_lbl = f"{r['side']} {r['outcome']}"  # "BUY Up" / "SELL Down" / etc
 
-        if r["outcome_status"] == "resolved":
-            pnl = r["our_pnl"]
-            roi = r["our_roi"]
+        if r.get("side") == "SELL":
+            # SELL в DRY не считаем в PnL (нет реального инвентаря)
             print(
-                f"{short:<44} | ${o['spent']:>8.2f} | {winner:>8} | "
-                f"${r['our_got']:>8.2f} | ${pnl:>+8.2f} | {roi:>+6.1f}%"
+                f"{n:>5} | {r['window']:>10} | {r['time']:>8} | {side_lbl:>7} | "
+                f"{r['price']:>5.3f} | ${r['my_usd']:>7.2f} | {'SELL':>7} | {'—':>8} | {'(не в PnL)':>9}"
             )
-            total_spent += o["spent"]
-            total_got += r["our_got"]
-            resolved += 1
+            sells += 1
+            continue
+
+        if r.get("status") == "resolved":
+            pnl = r["pnl"]
+            print(
+                f"{n:>5} | {r['window']:>10} | {r['time']:>8} | {side_lbl:>7} | "
+                f"{r['price']:>5.3f} | ${r['my_usd']:>7.2f} | {r['winner']:>7} | "
+                f"${r['got']:>6.2f} | ${pnl:>+7.2f}"
+            )
+            total_spent += r["my_usd"]
+            total_got += r["got"]
             if pnl > 0:
                 wins += 1
             else:
                 losses += 1
-        elif r["outcome_status"] == "active":
-            active += 1
+        elif r.get("status") == "active":
             print(
-                f"{short:<44} | ${o['spent']:>8.2f} | {'ACTIVE':>8} | "
-                f"{'—':>9} | {'—':>9} | —"
+                f"{n:>5} | {r['window']:>10} | {r['time']:>8} | {side_lbl:>7} | "
+                f"{r['price']:>5.3f} | ${r['my_usd']:>7.2f} | {'ACTIVE':>7} | {'—':>8} | {'—':>9}"
             )
+            pending += 1
         else:
-            status = r["outcome_status"] or "unknown"
+            st = (r.get("status") or "?")[:7]
             print(
-                f"{short:<44} | ${o['spent']:>8.2f} | {status[:8]:>8} | "
-                f"{'—':>9} | {'—':>9} | —"
+                f"{n:>5} | {r['window']:>10} | {r['time']:>8} | {side_lbl:>7} | "
+                f"{r['price']:>5.3f} | ${r['my_usd']:>7.2f} | {st:>7} | {'—':>8} | {'—':>9}"
             )
 
-    print("-" * 92)
-    pnl_total = total_got - total_spent
-    roi = (pnl_total / total_spent * 100) if total_spent > 0 else 0
-    winrate = (wins / resolved * 100) if resolved > 0 else 0
+    print("-" * width)
+
+    total_resolved = wins + losses
+    pnl = total_got - total_spent
+    roi = (pnl / total_spent * 100) if total_spent > 0 else 0
+    winrate = (wins / total_resolved * 100) if total_resolved > 0 else 0
+
     print()
-    print(f"=== ИТОГО ===")
-    print(f"Окон сыграно:         {resolved}  ({wins} в плюс / {losses} в минус, винрейт {winrate:.0f}%)")
-    if active:
-        print(f"Окон активных:        {active}  (ещё не резолвились — не считаются)")
+    print("=== ИТОГО ===")
+    print(f"Сделок завершено:     {total_resolved}  ({wins} в плюс / {losses} в минус, винрейт {winrate:.0f}%)")
+    if pending:
+        print(f"Сделок ждут резолва:  {pending}")
+    if sells:
+        print(f"Сделок SELL:          {sells}  (в DRY не учитываются в PnL)")
     print(f"Поставил всего:       ${total_spent:>10,.2f}")
     print(f"Получил всего:        ${total_got:>10,.2f}")
-    print(f"PnL (прибыль/убыток): ${pnl_total:>+10,.2f}")
+    print(f"PnL:                  ${pnl:>+10,.2f}")
     print(f"ROI:                  {roi:>+9.1f}%")
     print()

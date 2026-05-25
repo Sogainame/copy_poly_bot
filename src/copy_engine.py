@@ -43,6 +43,7 @@ def build_copy_record(
         "parent_ts": parent.get("timestamp"),
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
+        "side": parent.get("side"),
         "outcome": parent.get("outcome"),
         "asset": parent.get("asset"),
         "conditionId": parent.get("conditionId"),
