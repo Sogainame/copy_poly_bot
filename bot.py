@@ -45,6 +45,7 @@ signal.signal(signal.SIGTERM, handle_sigint)
 
 
 def main():
+    global SHOULD_STOP
     cfg = load_config()
 
     log("=" * 70)
