@@ -15,7 +15,6 @@ bet_max: 10.0            # максимум $10 на одну сделку
 # Возможные: btc-5m, btc-15m, eth-5m, eth-15m, sol-5m, sol-15m, xrp-5m, xrp-15m
 filter_markets:
   - btc-5m
-  - btc-15m
 
 # Минимальный размер его сделки в shares (отсекает rewards/артефакты)
 min_size_shares: 1
