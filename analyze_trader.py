@@ -117,8 +117,11 @@ def main():
 
     # Кеш резолвов
     cache = load_outcome_cache()
-    titles = list({t.get("title", "") for t in trades if t.get("title")})
-    cache = fetch_outcomes_with_progress(titles, cache)
+    items = [
+        (t.get("title", ""), t.get("conditionId"))
+        for t in trades if t.get("title")
+    ]
+    cache = fetch_outcomes_with_progress(items, cache)
 
     # Считаем PnL для BUY
     rows = []

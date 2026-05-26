@@ -60,8 +60,11 @@ def main():
 
     # Подгружаем outcome для всех окон в этой выборке (из кеша, новые запросим)
     cache = load_outcome_cache()
-    titles = list({r.get("title", "") for r in last if r.get("title")})
-    cache = fetch_outcomes_with_progress(titles, cache)
+    items = [
+        (r.get("title", ""), r.get("conditionId"))
+        for r in last if r.get("title")
+    ]
+    cache = fetch_outcomes_with_progress(items, cache)
 
     # Считаем PnL по каждой сделке
     rows = []
