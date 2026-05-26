@@ -21,19 +21,18 @@ DATA_API = "https://data-api.polymarket.com/activity"
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 
 
-def fetch_trades(wallet: str, limit: int = 5):
-    """Берём не самые последние, а из середины (offset=100) — там скорее резолвенные старые."""
-    print(f"Запрашиваю {limit} сделок трейдера {wallet[:10]}... (offset=100, чтоб попасть на резолвенные)")
+def fetch_trades(wallet: str, offset: int = 0, limit: int = 1):
+    print(f"Запрашиваю {limit} сделок трейдера {wallet[:10]}... (offset={offset})")
     r = requests.get(
         DATA_API,
-        params={"user": wallet, "type": "TRADE", "limit": limit, "offset": 100},
+        params={"user": wallet, "type": "TRADE", "limit": limit, "offset": offset},
         timeout=15,
     )
     print(f"  HTTP {r.status_code}")
     if r.status_code != 200:
         print(f"  Body: {r.text[:300]}")
         return []
-    return r.json()
+    return r.json() or []
 
 
 def fetch_market_by_condition(cid: str):
@@ -63,20 +62,44 @@ def fetch_market_by_condition(cid: str):
 def main():
     wallet = sys.argv[1] if len(sys.argv) > 1 else load_config().target_wallet
 
-    trades = fetch_trades(wallet, limit=3)
-    if not trades:
+    # Берём сделки с разных offset чтобы попасть и в свежие и в СТАРЫЕ
+    # (старые точно резолвены — смотрим что Gamma вернёт для них)
+    offsets = [0, 500, 1500, 2500]
+    all_trades = []
+    seen_cids = set()
+    for off in offsets:
+        trs = fetch_trades(wallet, offset=off, limit=3)
+        for t in trs:
+            cid = t.get("conditionId")
+            if cid and cid not in seen_cids:
+                seen_cids.add(cid)
+                t["_offset"] = off
+                all_trades.append(t)
+                if len(all_trades) >= 6:  # хватит
+                    break
+        if len(all_trades) >= 6:
+            break
+
+    if not all_trades:
         print("Нет сделок.")
         return
 
-    print(f"\n=== Получено {len(trades)} сделок ===\n")
+    print(f"\n=== Получено {len(all_trades)} разных маркетов с offset'ами {offsets} ===\n")
 
-    for i, t in enumerate(trades, 1):
-        print(f"╔══════════════════ СДЕЛКА #{i} ══════════════════╗")
-        # Все ключи которые есть в trade record
-        print("Все поля сделки (Polymarket Data API):")
-        for k, v in t.items():
-            val = str(v)[:80]
+    for i, t in enumerate(all_trades, 1):
+        print(f"╔══════════════════ МАРКЕТ #{i} (offset={t['_offset']}) ══════════════════╗")
+        # Только важные поля
+        keys = ["timestamp", "title", "side", "outcome", "price", "size", "conditionId"]
+        for k in keys:
+            v = t.get(k)
+            val = str(v)[:80] if v is not None else "None"
             print(f"  {k}: {val}")
+        # Дата сделки → читаемо
+        ts = t.get("timestamp", 0)
+        if ts:
+            from datetime import datetime, timezone
+            dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            print(f"  trade_date: {dt}")
         print()
 
         cid = t.get("conditionId")
@@ -85,19 +108,17 @@ def main():
             print()
             continue
 
-        print(f"Запрашиваю Gamma по conditionId={cid[:20]}...")
         m = fetch_market_by_condition(cid)
         if not m:
             print("  Gamma не вернул маркет\n")
             continue
 
-        print("\nВсе поля маркета от Gamma:")
-        # Только важные поля чтобы не залить
+        print("Важные поля маркета от Gamma:")
         important_keys = [
-            "question", "slug", "active", "closed", "archived",
-            "outcomes", "outcomePrices", "resolutionSource",
+            "question", "active", "closed", "archived",
+            "outcomes", "outcomePrices",
             "endDate", "closedTime", "umaResolutionStatuses",
-            "marketType", "negRisk", "volume", "liquidity",
+            "negRisk", "volume",
         ]
         for k in important_keys:
             if k in m:
@@ -105,14 +126,9 @@ def main():
                 print(f"  {k}: {val}")
 
         # Тест моего парсера
-        print("\nПарсинг моим _market_to_outcome:")
-        try:
-            from src.gamma import _market_to_outcome
-            result = _market_to_outcome(m)
-            print(f"  → {result}")
-        except Exception as e:
-            print(f"  ОШИБКА: {e}")
-
+        from src.gamma import _market_to_outcome
+        result = _market_to_outcome(m)
+        print(f"\n  _market_to_outcome → {result}")
         print()
 
 
