@@ -1,9 +1,10 @@
-"""Анализатор: PnL по КАЖДОЙ моей сделке (BTC 5m).
+"""Анализатор: PnL по КАЖДОЙ моей сделке.
 
 Каждая строка = одна моя ставка. Видно:
   Время сделки | Окно | BUY/SELL | Up/Down | Цена | Поставил | Резолв | Получил | PnL
 """
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any
@@ -12,6 +13,8 @@ from . import gamma
 from .config import load_config
 from .filters import extract_window_info, match_filter
 from .storage import OUR_COPIES
+
+OUTCOME_CACHE = OUR_COPIES.parent / "outcome_cache.json"
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -29,6 +32,48 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
+def load_outcome_cache() -> Dict[str, Dict[str, Any]]:
+    """Кеш резолвов на диске. Резолв окна не меняется после резолва — кешируем навсегда."""
+    if not OUTCOME_CACHE.exists():
+        return {}
+    try:
+        return json.loads(OUTCOME_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_outcome_cache(cache: Dict[str, Dict[str, Any]]):
+    OUTCOME_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def fetch_outcomes_with_progress(titles: List[str], cache: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Запрашивает резолвы для всех titles. Кешированные resolved пропускаются.
+    Печатает прогресс чтобы было видно что работает.
+    """
+    to_fetch = []
+    for t in titles:
+        cached = cache.get(t)
+        # Кешируем только resolved (active может стать resolved позже)
+        if cached and cached.get("status") == "resolved":
+            continue
+        to_fetch.append(t)
+
+    if not to_fetch:
+        print(f"Все {len(titles)} окон уже в кеше, запросов к Polymarket не нужно.")
+        return cache
+
+    print(f"Запрашиваю резолвы {len(to_fetch)} окон из Polymarket Gamma API...")
+    for i, title in enumerate(to_fetch, 1):
+        cache[title] = gamma.get_outcome(title)
+        # Прогресс каждые 10 запросов или на последнем
+        if i % 10 == 0 or i == len(to_fetch):
+            print(f"  [{i}/{len(to_fetch)}] {title[:60]}", flush=True)
+
+    save_outcome_cache(cache)
+    print(f"Готово. Резолвы сохранены в кеш ({OUTCOME_CACHE.name}).\n")
+    return cache
+
+
 def compute_pnl():
     """Главный отчёт: PnL по каждой нашей сделке (только маркеты из config.filter_markets)."""
     cfg = load_config()
@@ -37,23 +82,24 @@ def compute_pnl():
         print("Нет наших копий. Запусти bot.py и подожди пока появятся сделки.")
         return
 
-    # Кеш резолвов окон, чтобы не дёргать Gamma 1500 раз
-    outcome_cache: Dict[str, Dict[str, Any]] = {}
+    # Фильтр по конфигу
+    ours = [r for r in ours if match_filter(r.get("title", ""), cfg.filter_markets)]
+    if not ours:
+        print(f"Нет копий по текущему filter_markets={cfg.filter_markets}.")
+        return
+
+    # Кеш резолвов на диске
+    cache = load_outcome_cache()
+    titles = list({r.get("title", "") for r in ours if r.get("title")})
+    cache = fetch_outcomes_with_progress(titles, cache)
 
     rows = []
     for r in ours:
         title = r.get("title", "")
         w = extract_window_info(title)
+        oc = cache.get(title, {"status": "unknown"})
 
-        # Только то что сейчас в фильтре конфига (динамически)
-        if not match_filter(title, cfg.filter_markets):
-            continue
-
-        if title not in outcome_cache:
-            outcome_cache[title] = gamma.get_outcome(title)
-        oc = outcome_cache[title]
-
-        side = r.get("side") or "BUY"  # default для старых записей без поля
+        side = r.get("side") or "BUY"
         outcome = r.get("outcome", "?")
         my_usd = float(r.get("my_usd", 0))
         my_shares = float(r.get("my_shares", 0))
@@ -65,13 +111,10 @@ def compute_pnl():
             if ts else "??:??:??"
         )
 
-        # Полное имя окна с активом (BTC/ETH/SOL/XRP)
-        short_window = w["short_window"]  # уже включает asset+tf+time
-
         row = {
             "copy_n": r.get("copy_n"),
             "time": trade_time,
-            "window": short_window,
+            "window": w["short_window"],
             "asset": w["asset"],
             "tf": w["tf"],
             "side": side,
@@ -86,7 +129,7 @@ def compute_pnl():
         if oc.get("status") == "resolved" and side == "BUY":
             winner = oc["winner"]
             if outcome == winner:
-                got = my_shares * 1.0   # каждый share выигравшей стороны = $1
+                got = my_shares * 1.0
                 pnl = got - my_usd
             else:
                 got = 0.0
@@ -96,7 +139,6 @@ def compute_pnl():
 
         rows.append(row)
 
-    # Сортировка: по окну, потом по времени
     rows.sort(key=lambda r: (r.get("window", ""), r.get("time", "")))
     print_report(rows)
 
