@@ -11,7 +11,7 @@ from typing import Dict, List, Any
 
 from . import gamma
 from .config import load_config
-from .filters import extract_window_info, match_filter
+from .filters import extract_window_info, match_keywords
 from .storage import OUR_COPIES
 
 OUTCOME_CACHE = OUR_COPIES.parent / "outcome_cache.json"
@@ -75,17 +75,17 @@ def fetch_outcomes_with_progress(titles: List[str], cache: Dict[str, Dict[str, A
 
 
 def compute_pnl():
-    """Главный отчёт: PnL по каждой нашей сделке (только маркеты из config.filter_markets)."""
+    """Главный отчёт: PnL по каждой нашей сделке."""
     cfg = load_config()
     ours = load_jsonl(OUR_COPIES)
     if not ours:
         print("Нет наших копий. Запусти bot.py и подожди пока появятся сделки.")
         return
 
-    # Фильтр по конфигу
-    ours = [r for r in ours if match_filter(r.get("title", ""), cfg.filter_markets)]
+    # Фильтр по filter_keywords (если пусто — берём все)
+    ours = [r for r in ours if match_keywords(r.get("title", ""), cfg.filter_keywords)]
     if not ours:
-        print(f"Нет копий по текущему filter_markets={cfg.filter_markets}.")
+        print(f"Нет копий по текущему filter_keywords={cfg.filter_keywords}.")
         return
 
     # Кеш резолвов на диске
@@ -126,7 +126,14 @@ def compute_pnl():
             "winner": oc.get("winner"),
         }
 
-        if oc.get("status") == "resolved" and side == "BUY":
+        # PnL расчёт:
+        #   BUY (resolved): купили → если выиграл — got=shares×$1, иначе got=$0
+        #   SELL (любой статус): продали → got=my_usd (выручка с продажи в моменте)
+        if side == "SELL":
+            # SELL = получили деньги (выручка от продажи)
+            row["got"] = my_usd
+            row["pnl"] = my_usd      # как чистая прибыль в моменте продажи
+        elif oc.get("status") == "resolved" and side == "BUY":
             winner = oc["winner"]
             if outcome == winner:
                 got = my_shares * 1.0
@@ -166,11 +173,13 @@ def print_report(rows: List[Dict[str, Any]]):
         side_lbl = f"{r['side']} {r['outcome']}"  # "BUY Up" / "SELL Down" / etc
 
         if r.get("side") == "SELL":
-            # SELL в DRY не считаем в PnL (нет реального инвентаря)
+            # SELL = выручка от продажи в моменте, учитывается в PnL
+            got = r.get("got", r["my_usd"])
             print(
                 f"{n:>5} | {r['window']:>10} | {r['time']:>8} | {side_lbl:>7} | "
-                f"{r['price']:>5.3f} | ${r['my_usd']:>7.2f} | {'SELL':>7} | {'—':>8} | {'(не в PnL)':>9}"
+                f"{r['price']:>5.3f} | {'—':>9} | {'SELL':>7} | ${got:>6.2f} | ${got:>+7.2f}"
             )
+            total_got += got
             sells += 1
             continue
 
@@ -209,13 +218,13 @@ def print_report(rows: List[Dict[str, Any]]):
 
     print()
     print("=== ИТОГО ===")
-    print(f"Сделок завершено:     {total_resolved}  ({wins} в плюс / {losses} в минус, винрейт {winrate:.0f}%)")
+    print(f"BUY завершено:        {total_resolved}  ({wins} в плюс / {losses} в минус, винрейт {winrate:.0f}%)")
     if pending:
-        print(f"Сделок ждут резолва:  {pending}")
+        print(f"BUY ждут резолва:     {pending}")
     if sells:
-        print(f"Сделок SELL:          {sells}  (в DRY не учитываются в PnL)")
-    print(f"Поставил всего:       ${total_spent:>10,.2f}")
-    print(f"Получил всего:        ${total_got:>10,.2f}")
+        print(f"SELL (выручка):       {sells}")
+    print(f"Поставил всего:       ${total_spent:>10,.2f}  (только BUY)")
+    print(f"Получил всего:        ${total_got:>10,.2f}  (резолв BUY + SELL выручка)")
     print(f"PnL:                  ${pnl:>+10,.2f}")
-    print(f"ROI:                  {roi:>+9.1f}%")
+    print(f"ROI:                  {roi:>+9.1f}%  (от Поставил)")
     print()

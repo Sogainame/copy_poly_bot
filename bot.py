@@ -27,7 +27,7 @@ from src.storage import (
     STATE_FILE,
 )
 from src.watcher import fetch_trades, trade_dedup_key
-from src.filters import match_filter, parse_market, extract_window_info
+from src.filters import match_keywords, parse_market, extract_window_info
 from src.copy_engine import calc_my_bet, build_trader_record, build_copy_record, execute_live_buy
 from src.telegram import send as tg_send
 
@@ -54,7 +54,8 @@ def main():
     log(f"Target wallet:  {cfg.target_wallet}")
     log(f"Mode:           {cfg.mode.upper()}")
     log(f"Bet:            {cfg.bet_pct*100:.0f}% (мин ${cfg.bet_min}, макс ${cfg.bet_max})")
-    log(f"Filter:         {', '.join(cfg.filter_markets)}")
+    kw_display = ", ".join(cfg.filter_keywords) if cfg.filter_keywords else "ВСЁ (без фильтра)"
+    log(f"Filter:         {kw_display}")
     log(f"Poll interval:  {cfg.poll_interval}s | api_limit={cfg.api_limit} | retries={cfg.max_retries}")
     log(f"Files:          trader→{TRADER_TRADES.name}, copies→{OUR_COPIES.name}, log→{BOT_LOG.name}")
     log("=" * 70)
@@ -130,17 +131,23 @@ def main():
                 # Парсим окно
                 w = extract_window_info(title)
 
-                # === ФИЛЬТР: только маркеты из config.filter_markets. Всё остальное — молча, не в лог ===
-                if not match_filter(title, cfg.filter_markets):
+                # === ФИЛЬТР: проверяем title против filter_keywords. Пусто = всё пропускаем ===
+                if not match_keywords(title, cfg.filter_keywords):
                     continue
 
-                # Заголовок при первом появлении нового окна (любая монета из filter)
+                # Заголовок при первом появлении нового окна
                 if w["key"] not in recent_windows:
-                    header = (
-                        "════════════════════ "
-                        f"ОКНО {w['asset']} {w['full_window']} ({w['tf']}m)"
-                        " ════════════════════"
-                    )
+                    if w["tf"]:
+                        # Крипто-окно с таймфреймом: "ОКНО BTC 5:00AM-5:15AM ET (5m)"
+                        header = (
+                            "════════════════════ "
+                            f"ОКНО {w['asset']} {w['full_window']} ({w['tf']}m)"
+                            " ════════════════════"
+                        )
+                    else:
+                        # Любой другой маркет (политика/спорт/etc): просто title
+                        title_short = title[:80] if title else "?"
+                        header = f"════════════════════ {title_short} ════════════════════"
                     log("")
                     log(header)
                     recent_windows.append(w["key"])

@@ -58,6 +58,21 @@ def match_filter(title: str, allowed: List[str]) -> bool:
     return code in allowed
 
 
+def match_keywords(title: str, keywords: List[str]) -> bool:
+    """Универсальный фильтр: True если в title есть хотя бы одно слово из keywords.
+    Регистр игнорируется. Пустой список keywords = разрешить ВСЁ.
+    """
+    if not keywords:
+        return True
+    if not title:
+        return False
+    title_low = title.lower()
+    for kw in keywords:
+        if kw and kw.lower() in title_low:
+            return True
+    return False
+
+
 def extract_window_info(title: str) -> dict:
     """Извлекает информацию об окне для логирования.
 

@@ -17,7 +17,8 @@ class Config:
     bet_pct: float
     bet_min: float
     bet_max: float
-    filter_markets: List[str]
+    filter_keywords: List[str]   # слова в title маркета. Пусто = копируем всё
+    filter_markets: List[str]    # deprecated, оставлен для обратной совместимости
     min_size_shares: float
     poll_interval: float
     api_limit: int
@@ -60,7 +61,8 @@ def load_config() -> Config:
         bet_pct=float(y["bet_pct"]),
         bet_min=float(y["bet_min"]),
         bet_max=float(y["bet_max"]),
-        filter_markets=list(y.get("filter_markets", ["btc-5m", "btc-15m"])),
+        filter_keywords=list(y.get("filter_keywords", [])),
+        filter_markets=list(y.get("filter_markets", [])),
         min_size_shares=float(y.get("min_size_shares", 1)),
         poll_interval=float(y.get("poll_interval", 1.0)),
         api_limit=int(y.get("api_limit", 20)),

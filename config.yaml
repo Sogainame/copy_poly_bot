@@ -11,17 +11,19 @@ bet_pct: 0.10            # 10% от его сделки
 bet_min: 1.0             # минимум $1 (Polymarket min order)
 bet_max: 10.0            # максимум $10 на одну сделку
 
-# Фильтр маркетов (что копируем)
-# Возможные: btc-5m, btc-15m, eth-5m, eth-15m, sol-5m, sol-15m, xrp-5m, xrp-15m
-filter_markets:
-  - btc-5m
-  - btc-15m
-  - eth-5m
-  - eth-15m
-  - sol-5m
-  - sol-15m
-  - xrp-5m
-  - xrp-15m
+# Фильтр маркетов: КЛЮЧЕВЫЕ СЛОВА в названии маркета (title).
+# Копируется только если в title есть хотя бы одно из слов (case-insensitive).
+# Пустой список [] = копируем ВСЁ что трейдер делает.
+#
+# Примеры:
+#   filter_keywords: ["Bitcoin", "Ethereum", "Solana", "XRP"]   # крипто Up/Down
+#   filter_keywords: ["Iran", "Trump", "Fed", "Hormuz"]          # политика
+#   filter_keywords: ["NFL", "NBA"]                              # спорт
+#   filter_keywords: []                                          # ВСЁ что он делает
+filter_keywords: []
+
+# DEPRECATED — оставлено для обратной совместимости, не используется
+filter_markets: []
 
 # Минимальный размер его сделки в shares (отсекает rewards/артефакты)
 min_size_shares: 0
