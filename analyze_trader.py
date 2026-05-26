@@ -118,7 +118,7 @@ def main():
     # Кеш резолвов
     cache = load_outcome_cache()
     items = [
-        (t.get("title", ""), t.get("conditionId"))
+        (t.get("title", ""), t.get("conditionId"), t.get("slug"))
         for t in trades if t.get("title")
     ]
     cache = fetch_outcomes_with_progress(items, cache)

@@ -23,6 +23,7 @@ def build_trader_record(t: Dict[str, Any], dedup_key: str) -> Dict[str, Any]:
         "usd": round(size * price, 4),
         "asset": t.get("asset"),
         "conditionId": t.get("conditionId"),
+        "slug": t.get("slug"),
         "transactionHash": t.get("transactionHash") or t.get("transaction_hash"),
         "title": t.get("title"),
     }
@@ -47,6 +48,7 @@ def build_copy_record(
         "outcome": parent.get("outcome"),
         "asset": parent.get("asset"),
         "conditionId": parent.get("conditionId"),
+        "slug": parent.get("slug"),
         "title": parent.get("title"),
         "his_size": float(parent.get("size", 0)),
         "his_price": float(parent.get("price", 0)),

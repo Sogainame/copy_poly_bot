@@ -92,27 +92,42 @@ def fetch_market_by_slug(slug: str, timeout: float = 8.0) -> Optional[Dict[str, 
 def fetch_market_by_condition_id(condition_id: str, timeout: float = 8.0) -> Optional[Dict[str, Any]]:
     """Универсально получает market info по condition_id.
     Работает для ЛЮБОГО типа маркета (крипто/погода/политика/спорт).
-    None при ошибке.
+
+    Gamma по умолчанию фильтрует только активные маркеты. Для резолвенных
+    нужно явно запросить с closed=true. Делаем двухпроходный поиск.
     """
     if not condition_id:
         return None
-    try:
-        r = requests.get(
-            f"{GAMMA_BASE}/markets",
-            params={"condition_ids": condition_id, "limit": 1},
-            timeout=timeout,
-        )
-        if r.status_code != 200:
+
+    def _try(extra_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        params = {"condition_ids": condition_id, "limit": 1}
+        params.update(extra_params)
+        try:
+            r = requests.get(f"{GAMMA_BASE}/markets", params=params, timeout=timeout)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            if isinstance(data, list) and data:
+                return data[0]
+            if isinstance(data, dict) and data.get("question"):
+                return data
             return None
-        data = r.json()
-        # API возвращает список (даже для одного condition_id)
-        if isinstance(data, list) and data:
-            return data[0]
-        if isinstance(data, dict) and data.get("question"):
-            return data
-        return None
-    except Exception:
-        return None
+        except Exception:
+            return None
+
+    # 1. Без фильтра (по умолчанию Gamma вернёт только active маркеты)
+    m = _try({})
+    if m:
+        return m
+
+    # 2. Closed-only (для резолвенных)
+    m = _try({"closed": "true"})
+    if m:
+        return m
+
+    # 3. Archived (на всякий случай)
+    m = _try({"archived": "true"})
+    return m
 
 
 def _market_to_outcome(market: Dict[str, Any]) -> Dict[str, Any]:
@@ -135,16 +150,32 @@ def _market_to_outcome(market: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "active", "prices": prices}
 
 
-def get_outcome(title: str, condition_id: Optional[str] = None) -> Dict[str, Any]:
+def get_outcome(
+    title: str,
+    condition_id: Optional[str] = None,
+    slug: Optional[str] = None,
+) -> Dict[str, Any]:
     """Возвращает статус и winner для маркета.
 
-    Стратегия:
-      1) Если есть condition_id — используем его (работает для любого маркета)
-      2) Иначе fallback на title-based slug (только для крипто Up/Down)
+    Стратегия (по приоритету):
+      1) Если есть slug — /markets/slug/{slug} (прямой lookup, работает для
+         резолвенных и активных без фильтрации)
+      2) Иначе если condition_id — /markets?condition_ids=X с двухпроходной
+         попыткой (default → closed=true)
+      3) Иначе title-based slug (только для крипто Up/Down)
 
     Возможные status: resolved, active, parse_error, not_found.
     """
-    # Приоритет: condition_id → универсальный поиск
+    # Приоритет 1: slug (надёжнее всего — прямой lookup)
+    if slug:
+        market = fetch_market_by_slug(slug)
+        if market:
+            result = _market_to_outcome(market)
+            result["slug"] = slug
+            return result
+        # slug не нашёлся — попробуем condition_id если есть
+
+    # Приоритет 2: condition_id
     if condition_id:
         market = fetch_market_by_condition_id(condition_id)
         if market:
@@ -153,17 +184,17 @@ def get_outcome(title: str, condition_id: Optional[str] = None) -> Dict[str, Any
             return result
         return {"status": "not_found", "condition_id": condition_id}
 
-    # Fallback: только для крипто Up/Down (Bitcoin/Ethereum/...)
+    # Приоритет 3: title parsing (для крипто Up/Down)
     parts = title_to_slug_parts(title)
     if not parts:
         return {"status": "parse_error"}
 
     asset_code, tf, ts = parts
-    slug = build_slug(asset_code, tf, ts)
-    market = fetch_market_by_slug(slug)
+    crypto_slug = build_slug(asset_code, tf, ts)
+    market = fetch_market_by_slug(crypto_slug)
     if not market:
-        return {"status": "not_found", "slug": slug}
+        return {"status": "not_found", "slug": crypto_slug}
 
     result = _market_to_outcome(market)
-    result["slug"] = slug
+    result["slug"] = crypto_slug
     return result

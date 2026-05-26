@@ -61,7 +61,7 @@ def main():
     # Подгружаем outcome для всех окон в этой выборке (из кеша, новые запросим)
     cache = load_outcome_cache()
     items = [
-        (r.get("title", ""), r.get("conditionId"))
+        (r.get("title", ""), r.get("conditionId"), r.get("slug"))
         for r in last if r.get("title")
     ]
     cache = fetch_outcomes_with_progress(items, cache)

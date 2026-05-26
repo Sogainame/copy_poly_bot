@@ -51,44 +51,49 @@ def fetch_outcomes_with_progress(
     cache: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
     """Запрашивает резолвы для всех маркетов. Кешированные resolved пропускаются.
-    Печатает прогресс чтобы было видно что работает.
 
-    items: либо список title-строк (back-compat), либо список (title, condition_id) tuples.
-    Cache всегда индексируется по title (для совместимости со старым кешем).
+    items: список tuples. Поддерживаются форматы:
+      - просто title (str)
+      - (title, condition_id)
+      - (title, condition_id, slug)
+    Cache индексируется по title.
     """
-    # Нормализуем items к (title, condition_id) tuples
+    # Нормализуем items к (title, condition_id, slug) tuples
     normalized = []
     for it in items:
         if isinstance(it, tuple):
-            normalized.append(it)
+            if len(it) == 2:
+                normalized.append((it[0], it[1], None))
+            elif len(it) >= 3:
+                normalized.append((it[0], it[1], it[2]))
+            else:
+                normalized.append((it[0], None, None))
         else:
-            normalized.append((it, None))
+            normalized.append((it, None, None))
 
-    # Берём только уникальные title
+    # Уникальные по title
     seen_titles = set()
     unique = []
-    for title, cid in normalized:
+    for title, cid, slug in normalized:
         if title in seen_titles:
             continue
         seen_titles.add(title)
-        unique.append((title, cid))
+        unique.append((title, cid, slug))
 
     to_fetch = []
-    for title, cid in unique:
+    for title, cid, slug in unique:
         cached = cache.get(title)
-        # Кешируем только resolved (active может стать resolved позже)
         if cached and cached.get("status") == "resolved":
             continue
-        to_fetch.append((title, cid))
+        to_fetch.append((title, cid, slug))
 
     if not to_fetch:
         print(f"Все {len(unique)} маркетов уже в кеше, запросов к Polymarket не нужно.")
         return cache
 
     print(f"Запрашиваю резолвы {len(to_fetch)} маркетов из Polymarket Gamma API...")
-    for i, (title, cid) in enumerate(to_fetch, 1):
-        cache[title] = gamma.get_outcome(title, condition_id=cid)
-        # Прогресс каждые 10 запросов или на последнем
+    for i, (title, cid, slug) in enumerate(to_fetch, 1):
+        cache[title] = gamma.get_outcome(title, condition_id=cid, slug=slug)
         if i % 10 == 0 or i == len(to_fetch):
             print(f"  [{i}/{len(to_fetch)}] {title[:60]}", flush=True)
 
@@ -114,7 +119,7 @@ def compute_pnl():
     # Кеш резолвов на диске
     cache = load_outcome_cache()
     items = [
-        (r.get("title", ""), r.get("conditionId"))
+        (r.get("title", ""), r.get("conditionId"), r.get("slug"))
         for r in ours if r.get("title")
     ]
     cache = fetch_outcomes_with_progress(items, cache)
