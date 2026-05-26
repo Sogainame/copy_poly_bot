@@ -43,15 +43,27 @@ def fetch_trades(
 def trade_dedup_key(t: Dict[str, Any]) -> str:
     """Уникальный ключ сделки.
     Если есть transactionHash — используем его (надёжнее всего).
-    Иначе fallback на (timestamp, asset, size, price, side).
+    Иначе fallback на (timestamp, asset, size, price, side) — все float'ы
+    нормализуются к фиксированной точности, чтобы API не сбивал дедуп
+    разным форматом строк ('0.24' vs '0.240' vs 0.24).
     """
     tx = t.get("transactionHash") or t.get("transaction_hash")
     if tx:
         return f"tx:{tx}"
+    # Нормализуем float — иначе один и тот же трейд в разных poll'ах
+    # даёт разные строковые ключи и дедуп ломается
+    try:
+        size_norm = f"{float(t.get('size', 0)):.6f}"
+    except (TypeError, ValueError):
+        size_norm = str(t.get('size', ''))
+    try:
+        price_norm = f"{float(t.get('price', 0)):.6f}"
+    except (TypeError, ValueError):
+        price_norm = str(t.get('price', ''))
     return (
         f"{t.get('timestamp', 0)}_"
         f"{t.get('asset', '')}_"
-        f"{t.get('size', '')}_"
-        f"{t.get('price', '')}_"
+        f"{size_norm}_"
+        f"{price_norm}_"
         f"{t.get('side', '')}"
     )
